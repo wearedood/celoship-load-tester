@@ -1,0 +1,5 @@
+{
+  "name": "CeloShip - Mainnet Load Tester",
+  "description": "A high-performance Celo Mainnet load testing tool. Generate wallets, disperse funds, and spam smart contract interactions to prove network resilience (Proof of Ship).",
+  "requestFramePermissions": []
+}

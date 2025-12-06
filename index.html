@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CeloShip - Mainnet Load Tester</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              celo: {
+                bg: '#F3FF5F', // The campaign bright yellow
+                black: '#111111',
+                white: '#FFFFFF',
+                purple: '#C5BFFF', // Lavender accent
+                green: '#65D986', // Mint accent
+                orange: '#FFAB7C', // Peach accent
+                blue: '#93C5FD',
+                gray: '#F1F5F9'
+              }
+            },
+            fontFamily: {
+              mono: ['Fira Code', 'monospace'],
+              sans: ['Inter', 'sans-serif'],
+              serif: ['EB Garamond', 'serif']
+            },
+            boxShadow: {
+              'brutal': '4px 4px 0px 0px rgba(17,17,17,1)',
+              'brutal-lg': '8px 8px 0px 0px rgba(17,17,17,1)',
+              'brutal-sm': '2px 2px 0px 0px rgba(17,17,17,1)',
+              'brutal-hover': '6px 6px 0px 0px rgba(17,17,17,1)',
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            }
+          }
+        }
+      }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=EB+Garamond:ital,wght@0,400;0,600;0,800;1,400;1,600&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.556.0",
+    "ethers": "https://aistudiocdn.com/ethers@^6.16.0"
+  }
+}
+</script>
+</head>
+  <body class="bg-celo-bg text-celo-black font-sans antialiased selection:bg-celo-purple selection:text-celo-black">
+    <div id="root"></div>
+    <script type="module" src="index.tsx"></script>
+  </body>
+</html>
