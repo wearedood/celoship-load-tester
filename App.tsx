@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Rocket, ShieldCheck, Cpu, ArrowRight, Download, Zap, RefreshCw, Trash2 } from 'lucide-react';
 import LogConsole from './components/LogConsole';
 import { LogEntry, LogType, WalletAccount } from './types';
-import { createWallets, createWalletsFromKeys, fundWallets, executeInteraction, isValidPrivateKey, getWalletInfo, getBalance } from './services/celoService';
+import { createWallets, createWalletsFromKeys, fundWallets, executeInteraction, isValidPrivateKey, getWalletInfo, getBalance, getWalletNonce } from './services/celoService';
 import { generateInteractionData, analyzeContractStrategy } from './services/geminiService';
 
 const App: React.FC = () => {
@@ -223,6 +223,15 @@ const App: React.FC = () => {
 
       try {
           const walletPromises = wallets.map(async (wallet, wIndex) => {
+              // 1. Manual Nonce Management: Fetch start nonce once per wallet
+              let nonce = 0;
+              try {
+                nonce = await getWalletNonce(wallet.address);
+              } catch (e) {
+                addLog(`[W${wIndex + 1}] Failed to fetch initial nonce.`, LogType.ERROR);
+                return;
+              }
+
               for (let i = 0; i < interactionsPerWallet; i++) {
                   setWallets(prev => {
                     const updated = [...prev];
@@ -231,7 +240,9 @@ const App: React.FC = () => {
                   });
     
                   try {
-                      const hash = await executeInteraction(wallet, targetContract, customData);
+                      // 2. Manual Nonce: Pass current nonce and increment locally
+                      const hash = await executeInteraction(wallet, targetContract, customData, nonce++);
+                      
                       addLog(`[W${wIndex + 1}] Tx ${i + 1}/${interactionsPerWallet} confirmed`, LogType.SUCCESS, hash);
                       setStats(s => ({ ...s, totalTx: s.totalTx + 1, successfulTx: s.successfulTx + 1 }));
                       
@@ -241,7 +252,10 @@ const App: React.FC = () => {
                         return updated;
                       });
                   } catch (error) {
-                      addLog(`[W${wIndex + 1}] Tx Failed`, LogType.ERROR);
+                      // 3. Improved Error Logging
+                      const reason = (error as any).reason || (error as any).message || "Unknown error";
+                      addLog(`[W${wIndex + 1}] Tx Failed: ${reason}`, LogType.ERROR);
+                      
                       setStats(s => ({ ...s, totalTx: s.totalTx + 1, failedTx: s.failedTx + 1 }));
                       setWallets(prev => {
                         const updated = [...prev];

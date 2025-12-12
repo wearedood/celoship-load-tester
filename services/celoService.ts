@@ -51,6 +51,10 @@ export const getBalance = async (address: string): Promise<string> => {
   }
 };
 
+export const getWalletNonce = async (address: string): Promise<number> => {
+    return await provider.getTransactionCount(address);
+};
+
 export const getWalletInfo = async (privateKey: string): Promise<{ address: string, balance: string } | null> => {
     try {
         const wallet = new Wallet(privateKey, provider);
@@ -98,15 +102,22 @@ export const fundWallets = async (
 export const executeInteraction = async (
   walletData: WalletAccount,
   targetContract: string,
-  data: string
+  data: string,
+  nonce?: number
 ): Promise<string> => {
   const wallet = new Wallet(walletData.privateKey, provider);
   
-  const tx = await wallet.sendTransaction({
+  const txRequest: any = {
     to: targetContract,
     value: 0, // Assuming simple interaction, not sending value to contract
     data: data || '0x' // Default to empty data if null
-  });
+  };
+
+  if (nonce !== undefined) {
+      txRequest.nonce = nonce;
+  }
+  
+  const tx = await wallet.sendTransaction(txRequest);
 
   return tx.hash;
 };
