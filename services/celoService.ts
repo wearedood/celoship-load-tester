@@ -103,14 +103,16 @@ export const executeInteraction = async (
   walletData: WalletAccount,
   targetContract: string,
   data: string,
-  nonce?: number
+  nonce?: number,
+  gasLimit: number = 300000
 ): Promise<string> => {
   const wallet = new Wallet(walletData.privateKey, provider);
   
   const txRequest: any = {
     to: targetContract,
     value: 0, // Assuming simple interaction, not sending value to contract
-    data: data || '0x' // Default to empty data if null
+    data: data || '0x', // Default to empty data if null
+    gasLimit: gasLimit // Force gas limit to skip estimateGas
   };
 
   if (nonce !== undefined) {

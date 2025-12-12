@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [aiStrategy, setAiStrategy] = useState('');
+  const [gasLimit, setGasLimit] = useState(300000);
 
   // Initial greeting
   useEffect(() => {
@@ -220,6 +221,7 @@ const App: React.FC = () => {
       addLog(`INITIATING SWARM SEQUENCE...`, LogType.INFO);
       addLog(`TARGET: ${targetContract}`, LogType.INFO);
       addLog(`INTENSITY: ${interactionsPerWallet} txs per wallet`, LogType.INFO);
+      addLog(`GAS LIMIT: ${gasLimit} (Estimation Skipped)`, LogType.INFO);
 
       try {
           const walletPromises = wallets.map(async (wallet, wIndex) => {
@@ -241,7 +243,8 @@ const App: React.FC = () => {
     
                   try {
                       // 2. Manual Nonce: Pass current nonce and increment locally
-                      const hash = await executeInteraction(wallet, targetContract, customData, nonce++);
+                      // 3. Skip Gas Estimation: Pass hardcoded gasLimit
+                      const hash = await executeInteraction(wallet, targetContract, customData, nonce++, gasLimit);
                       
                       addLog(`[W${wIndex + 1}] Tx ${i + 1}/${interactionsPerWallet} confirmed`, LogType.SUCCESS, hash);
                       setStats(s => ({ ...s, totalTx: s.totalTx + 1, successfulTx: s.successfulTx + 1 }));
@@ -385,15 +388,27 @@ const App: React.FC = () => {
                                         />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-bold uppercase mb-1">Funding Amount (CELO)</label>
-                                    <input 
-                                        type="text" 
-                                        className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
-                                        value={fundingAmount}
-                                        onChange={e => setFundingAmount(e.target.value)}
-                                        placeholder="0.01"
-                                    />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Funding (CELO)</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={fundingAmount}
+                                            onChange={e => setFundingAmount(e.target.value)}
+                                            placeholder="0.01"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Gas Limit</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={gasLimit}
+                                            onChange={e => setGasLimit(parseInt(e.target.value))}
+                                            step={10000}
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         ) : (
@@ -424,6 +439,16 @@ const App: React.FC = () => {
                                             placeholder="0.01"
                                         />
                                     </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase mb-1">Gas Limit</label>
+                                    <input 
+                                        type="number" 
+                                        className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                        value={gasLimit}
+                                        onChange={e => setGasLimit(parseInt(e.target.value))}
+                                        step={10000}
+                                    />
                                 </div>
                             </div>
                         )}
