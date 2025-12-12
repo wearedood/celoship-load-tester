@@ -51,6 +51,19 @@ export const getBalance = async (address: string): Promise<string> => {
   }
 };
 
+export const getWalletInfo = async (privateKey: string): Promise<{ address: string, balance: string } | null> => {
+    try {
+        const wallet = new Wallet(privateKey, provider);
+        const balanceWei = await provider.getBalance(wallet.address);
+        return {
+            address: wallet.address,
+            balance: formatEther(balanceWei)
+        };
+    } catch (e) {
+        return null;
+    }
+};
+
 export const fundWallets = async (
   funderPrivateKey: string, 
   targets: WalletAccount[], 
@@ -61,8 +74,7 @@ export const fundWallets = async (
   const amountWei = parseEther(amountPerWallet);
 
   // In a real load test, we might batch this or use a dispenser contract.
-  // For this simplified app, we send 1-by-1 or use a multicall if we had the contract.
-  // We will loop linearly for safety and clarity in this demo.
+  // For this simplified app, we send 1-by-1 linearly for safety and clarity.
   
   for (let i = 0; i < targets.length; i++) {
     try {
@@ -70,9 +82,12 @@ export const fundWallets = async (
           to: targets[i].address,
           value: amountWei
         });
-        // We don't wait for confirmation to speed up UI, but realistically we should
+        
+        // BLOCKING: Wait for 1 confirmation to ensure funds are usable
+        await tx.wait(1); 
+        
+        // Notify only after confirmation
         onProgress(i, tx.hash);
-        await tx.wait(1); // Wait for 1 block to ensure they have funds before attacking
     } catch (e) {
         console.error("Funding failed for wallet " + i, e);
         // Continue funding others even if one fails

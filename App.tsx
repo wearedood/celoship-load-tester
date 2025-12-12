@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Play, Wallet, Database, Zap, Cpu, ShieldCheck, Terminal, Rocket, CheckCircle2, AlertOctagon, Download, FileText, Plus, Send, ThumbsUp, ArrowRight } from 'lucide-react';
+import { Rocket, ShieldCheck, Cpu, ArrowRight, Download, Zap, RefreshCw, Trash2 } from 'lucide-react';
 import LogConsole from './components/LogConsole';
 import { LogEntry, LogType, WalletAccount } from './types';
-import { createWallets, createWalletsFromKeys, fundWallets, executeInteraction, isValidPrivateKey } from './services/celoService';
+import { createWallets, createWalletsFromKeys, fundWallets, executeInteraction, isValidPrivateKey, getWalletInfo, getBalance } from './services/celoService';
 import { generateInteractionData, analyzeContractStrategy } from './services/geminiService';
 
 const App: React.FC = () => {
-  const [isRunning, setIsRunning] = useState(false);
+  const [isFunding, setIsFunding] = useState(false);
+  const [isSwarming, setIsSwarming] = useState(false);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [wallets, setWallets] = useState<WalletAccount[]>([]);
   const [stats, setStats] = useState({ totalTx: 0, successfulTx: 0, failedTx: 0 });
@@ -17,7 +18,9 @@ const App: React.FC = () => {
   const [walletCount, setWalletCount] = useState(5);
   const [importText, setImportText] = useState('');
   const [interactionsPerWallet, setInteractionsPerWallet] = useState(10);
+  const [fundingAmount, setFundingAmount] = useState('0.01');
   const [funderKey, setFunderKey] = useState('');
+  const [funderBalance, setFunderBalance] = useState<string | null>(null);
   const [customData, setCustomData] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
@@ -37,6 +40,23 @@ const App: React.FC = () => {
         setWalletCount(lines.length);
     }
   }, [importText, walletMode]);
+
+  // Fetch Funder Balance when key changes
+  useEffect(() => {
+      const checkBalance = async () => {
+          if (isValidPrivateKey(funderKey)) {
+              const info = await getWalletInfo(funderKey);
+              if (info) {
+                  setFunderBalance(info.balance);
+              }
+          } else {
+              setFunderBalance(null);
+          }
+      };
+      
+      const timer = setTimeout(checkBalance, 500); // Debounce
+      return () => clearTimeout(timer);
+  }, [funderKey]);
 
   const addLog = useCallback((message: string, type: LogType, txHash?: string) => {
     const entry: LogEntry = {
@@ -88,8 +108,8 @@ const App: React.FC = () => {
     }
 
     const csvContent = "data:text/csv;charset=utf-8," 
-        + "Index,Address,PrivateKey,Status,TxCount\n"
-        + wallets.map((w, i) => `${i+1},${w.address},${w.privateKey},${w.status},${w.txCount}`).join("\n");
+        + "Index,Address,PrivateKey,Status,TxCount,Balance\n"
+        + wallets.map((w, i) => `${i+1},${w.address},${w.privateKey},${w.status},${w.txCount},${w.balance}`).join("\n");
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -101,24 +121,19 @@ const App: React.FC = () => {
     addLog("Wallets exported to CSV.", LogType.SUCCESS);
   };
 
-  const runSimulation = async () => {
-    if (isRunning) return;
-    if (!isValidPrivateKey(funderKey)) {
-        addLog("Invalid Funder Private Key", LogType.ERROR);
-        return;
-    }
-    if (!targetContract) {
-        addLog("Target Contract address required", LogType.ERROR);
-        return;
-    }
+  const updateFleetBalances = async (currentWallets: WalletAccount[]) => {
+      addLog("Refreshing fleet balances...", LogType.INFO);
+      const updatedWallets = [...currentWallets];
+      
+      // Update in chunks or one by one
+      for (let i = 0; i < updatedWallets.length; i++) {
+          const bal = await getBalance(updatedWallets[i].address);
+          updatedWallets[i].balance = bal;
+      }
+      setWallets(updatedWallets);
+  };
 
-    setIsRunning(true);
-    setStats({ totalTx: 0, successfulTx: 0, failedTx: 0 });
-    addLog(`INITIATING PROOF OF SHIP SEQUENCE...`, LogType.INFO);
-    addLog(`TARGET: ${targetContract}`, LogType.INFO);
-
-    try {
-      // 1. Create Wallets
+  const prepareFleet = (): WalletAccount[] => {
       let newWallets: WalletAccount[] = [];
       if (walletMode === 'generate') {
           addLog(`Generating ${walletCount} fresh wallets...`, LogType.INFO);
@@ -129,74 +144,136 @@ const App: React.FC = () => {
           const keys = importText.split('\n');
           newWallets = createWalletsFromKeys(keys);
           if (newWallets.length === 0) {
-              throw new Error("No valid keys found.");
+              addLog("No valid keys found in import.", LogType.ERROR);
+              return [];
           }
           addLog(`Imported ${newWallets.length} wallets.`, LogType.SUCCESS);
       }
-      
       setWallets(newWallets);
+      return newWallets;
+  };
 
-      // 2. Fund Wallets
-      addLog(`Dispersing funds...`, LogType.INFO);
-      const fundAmount = "0.01"; 
+  const resetFleet = () => {
+      setWallets([]);
+      setStats({ totalTx: 0, successfulTx: 0, failedTx: 0 });
+      addLog("Fleet reset. Ready for new configuration.", LogType.INFO);
+  };
 
-      await fundWallets(funderKey, newWallets, fundAmount, (index, txHash) => {
-         addLog(`Funded Wallet ${index + 1}`, LogType.SUCCESS, txHash);
-         setWallets(prev => {
-             const updated = [...prev];
-             if (updated[index]) updated[index].status = 'funding';
-             return updated;
-         });
-      });
-
-      // 3. Execute Interactions
-      addLog(`Starting Transaction Swarm: ${interactionsPerWallet} tx/wallet`, LogType.INFO);
+  const handleFundFleet = async () => {
+      if (isFunding || isSwarming) return;
       
-      const walletPromises = newWallets.map(async (wallet, wIndex) => {
-          for (let i = 0; i < interactionsPerWallet; i++) {
+      if (!isValidPrivateKey(funderKey)) {
+          addLog("Invalid Funder Private Key", LogType.ERROR);
+          return;
+      }
+
+      setIsFunding(true);
+      
+      try {
+          // 1. Ensure Wallets Exist
+          let currentWallets = wallets;
+          if (currentWallets.length === 0) {
+              currentWallets = prepareFleet();
+              if (currentWallets.length === 0) throw new Error("Failed to initialize fleet.");
+          }
+
+          // 2. Fund Wallets
+          addLog(`Dispersing ${fundingAmount} CELO to ${currentWallets.length} wallets (Blocking)...`, LogType.INFO);
+          
+          await fundWallets(funderKey, currentWallets, fundingAmount, (index, txHash) => {
+             addLog(`Funded Wallet ${index + 1} - Confirmed`, LogType.SUCCESS, txHash);
+             setWallets(prev => {
+                 const updated = [...prev];
+                 if (updated[index]) updated[index].status = 'funding';
+                 return updated;
+             });
+          });
+          
+          addLog("Funds confirmed. Waiting 3s for network propagation...", LogType.WARNING);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+
+          await updateFleetBalances(currentWallets);
+          addLog("Funding sequence complete. Fleet Ready.", LogType.SUCCESS);
+
+      } catch (error) {
+          addLog(`Funding Error: ${(error as Error).message}`, LogType.ERROR);
+      } finally {
+          setIsFunding(false);
+      }
+  };
+
+  const handleStartSwarm = async () => {
+      if (isFunding || isSwarming) return;
+
+      if (!targetContract) {
+          addLog("Target Contract address required", LogType.ERROR);
+          return;
+      }
+
+      if (wallets.length === 0) {
+          addLog("No active fleet. Generate or Fund first.", LogType.ERROR);
+          return;
+      }
+
+      setIsSwarming(true);
+      setStats({ totalTx: 0, successfulTx: 0, failedTx: 0 });
+      addLog(`INITIATING SWARM SEQUENCE...`, LogType.INFO);
+      addLog(`TARGET: ${targetContract}`, LogType.INFO);
+      addLog(`INTENSITY: ${interactionsPerWallet} txs per wallet`, LogType.INFO);
+
+      try {
+          const walletPromises = wallets.map(async (wallet, wIndex) => {
+              for (let i = 0; i < interactionsPerWallet; i++) {
+                  setWallets(prev => {
+                    const updated = [...prev];
+                    if (updated[wIndex]) updated[wIndex].status = 'sending';
+                    return updated;
+                  });
+    
+                  try {
+                      const hash = await executeInteraction(wallet, targetContract, customData);
+                      addLog(`[W${wIndex + 1}] Tx ${i + 1}/${interactionsPerWallet} confirmed`, LogType.SUCCESS, hash);
+                      setStats(s => ({ ...s, totalTx: s.totalTx + 1, successfulTx: s.successfulTx + 1 }));
+                      
+                      setWallets(prev => {
+                        const updated = [...prev];
+                        if (updated[wIndex]) updated[wIndex].txCount += 1;
+                        return updated;
+                      });
+                  } catch (error) {
+                      addLog(`[W${wIndex + 1}] Tx Failed`, LogType.ERROR);
+                      setStats(s => ({ ...s, totalTx: s.totalTx + 1, failedTx: s.failedTx + 1 }));
+                      setWallets(prev => {
+                        const updated = [...prev];
+                        if (updated[wIndex]) updated[wIndex].status = 'error';
+                        return updated;
+                      });
+                  }
+                  await new Promise(r => setTimeout(r, 200)); 
+              }
               setWallets(prev => {
                 const updated = [...prev];
-                if (updated[wIndex]) updated[wIndex].status = 'sending';
+                if (updated[wIndex]) updated[wIndex].status = 'done';
                 return updated;
               });
-
-              try {
-                  const hash = await executeInteraction(wallet, targetContract, customData);
-                  addLog(`[W${wIndex + 1}] Tx ${i + 1}/${interactionsPerWallet} confirmed`, LogType.SUCCESS, hash);
-                  setStats(s => ({ ...s, totalTx: s.totalTx + 1, successfulTx: s.successfulTx + 1 }));
-                  
-                  setWallets(prev => {
-                    const updated = [...prev];
-                    if (updated[wIndex]) updated[wIndex].txCount += 1;
-                    return updated;
-                  });
-              } catch (error) {
-                  addLog(`[W${wIndex + 1}] Tx Failed`, LogType.ERROR);
-                  setStats(s => ({ ...s, totalTx: s.totalTx + 1, failedTx: s.failedTx + 1 }));
-                  setWallets(prev => {
-                    const updated = [...prev];
-                    if (updated[wIndex]) updated[wIndex].status = 'error';
-                    return updated;
-                  });
-              }
-              await new Promise(r => setTimeout(r, 200)); 
-          }
-          setWallets(prev => {
-            const updated = [...prev];
-            if (updated[wIndex]) updated[wIndex].status = 'done';
-            return updated;
           });
-      });
-
-      await Promise.all(walletPromises);
-      addLog("SEQUENCE COMPLETE.", LogType.SUCCESS);
-
-    } catch (error) {
-      addLog(`CRITICAL FAILURE: ${(error as Error).message}`, LogType.ERROR);
-    } finally {
-      setIsRunning(false);
-    }
+    
+          await Promise.all(walletPromises);
+          addLog("SWARM COMPLETE.", LogType.SUCCESS);
+          
+          setWallets(prev => {
+              const w = [...prev];
+              updateFleetBalances(w);
+              return w;
+          });
+      } catch (error) {
+          addLog(`Swarm Error: ${(error as Error).message}`, LogType.ERROR);
+      } finally {
+          setIsSwarming(false);
+      }
   };
+
+  const isBusy = isFunding || isSwarming;
 
   return (
     <div className="min-h-screen p-4 md:p-8 flex flex-col items-center">
@@ -271,25 +348,37 @@ const App: React.FC = () => {
                         </div>
 
                         {walletMode === 'generate' ? (
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-bold uppercase mb-1">Wallets</label>
-                                    <input 
-                                        type="number" 
-                                        className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
-                                        value={walletCount}
-                                        onChange={e => setWalletCount(parseInt(e.target.value))}
-                                        min={1} max={50}
-                                    />
+                            <div className="space-y-3">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Wallets</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={walletCount}
+                                            onChange={e => setWalletCount(parseInt(e.target.value))}
+                                            min={1} max={50}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Tx / Wallet</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={interactionsPerWallet}
+                                            onChange={e => setInteractionsPerWallet(parseInt(e.target.value))}
+                                            min={1} max={100}
+                                        />
+                                    </div>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-bold uppercase mb-1">Tx / Wallet</label>
+                                    <label className="block text-xs font-bold uppercase mb-1">Funding Amount (CELO)</label>
                                     <input 
-                                        type="number" 
+                                        type="text" 
                                         className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
-                                        value={interactionsPerWallet}
-                                        onChange={e => setInteractionsPerWallet(parseInt(e.target.value))}
-                                        min={1} max={100}
+                                        value={fundingAmount}
+                                        onChange={e => setFundingAmount(e.target.value)}
+                                        placeholder="0.01"
                                     />
                                 </div>
                             </div>
@@ -301,24 +390,44 @@ const App: React.FC = () => {
                                     value={importText}
                                     onChange={e => setImportText(e.target.value)}
                                 />
-                                <div>
-                                    <label className="block text-xs font-bold uppercase mb-1">Tx / Wallet</label>
-                                    <input 
-                                        type="number" 
-                                        className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
-                                        value={interactionsPerWallet}
-                                        onChange={e => setInteractionsPerWallet(parseInt(e.target.value))}
-                                    />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Tx / Wallet</label>
+                                        <input 
+                                            type="number" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={interactionsPerWallet}
+                                            onChange={e => setInteractionsPerWallet(parseInt(e.target.value))}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase mb-1">Funding (CELO)</label>
+                                        <input 
+                                            type="text" 
+                                            className="w-full border-2 border-celo-black p-2 font-mono text-sm outline-none focus:bg-white"
+                                            value={fundingAmount}
+                                            onChange={e => setFundingAmount(e.target.value)}
+                                            placeholder="0.01"
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         )}
                     </div>
 
                     <div>
-                        <label className="block text-sm font-bold uppercase mb-2 flex items-center justify-between">
-                            Funder Private Key
-                            <ShieldCheck className="w-4 h-4" />
-                        </label>
+                        <div className="flex justify-between items-center mb-2">
+                             <label className="block text-sm font-bold uppercase flex items-center gap-2">
+                                Funder Private Key
+                                <ShieldCheck className="w-4 h-4" />
+                            </label>
+                            {funderBalance && (
+                                <span className="text-xs font-mono font-bold bg-celo-black text-white px-2 py-0.5">
+                                    BAL: {parseFloat(funderBalance).toFixed(3)} CELO
+                                </span>
+                            )}
+                        </div>
+                       
                         <input 
                             type="password" 
                             className="w-full bg-celo-gray border-2 border-celo-black p-3 font-mono text-sm focus:bg-white focus:shadow-brutal-sm outline-none transition-all"
@@ -381,17 +490,40 @@ const App: React.FC = () => {
                 </div>
             </div>
 
-            {/* START BUTTON */}
-            <button 
-                onClick={runSimulation}
-                disabled={isRunning}
-                className={`w-full py-6 text-xl font-serif italic border-2 border-celo-black shadow-brutal-lg hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-brutal transition-all flex items-center justify-center gap-3 ${
-                    isRunning ? 'bg-gray-300 cursor-not-allowed text-gray-600' : 'bg-celo-black text-celo-bg'
-                }`}
-            >
-                {isRunning ? 'Running Simulation...' : 'Launch Sequence'}
-                {!isRunning && <Rocket className="w-6 h-6" />}
-            </button>
+            {/* CONTROL PANEL */}
+            <div className="grid grid-cols-2 gap-4">
+                <button 
+                    onClick={handleFundFleet}
+                    disabled={isBusy}
+                    className={`w-full py-6 text-xl font-serif italic border-2 border-celo-black shadow-brutal hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-brutal-sm transition-all flex flex-col items-center justify-center gap-2 ${
+                        isBusy ? 'bg-gray-200 cursor-not-allowed text-gray-400' : 'bg-celo-green text-celo-black'
+                    }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <span>Fund Fleet</span>
+                        <Zap className="w-5 h-5" />
+                    </div>
+                    <span className="text-xs font-sans not-italic font-bold uppercase opacity-80">
+                        {isFunding ? 'Funding...' : 'Deploy & Fund'}
+                    </span>
+                </button>
+
+                <button 
+                    onClick={handleStartSwarm}
+                    disabled={isBusy || wallets.length === 0}
+                    className={`w-full py-6 text-xl font-serif italic border-2 border-celo-black shadow-brutal hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-brutal-sm transition-all flex flex-col items-center justify-center gap-2 ${
+                        isBusy || wallets.length === 0 ? 'bg-gray-200 cursor-not-allowed text-gray-400' : 'bg-celo-black text-celo-bg'
+                    }`}
+                >
+                    <div className="flex items-center gap-2">
+                        <span>Start Swarm</span>
+                        <Rocket className="w-5 h-5" />
+                    </div>
+                    <span className="text-xs font-sans not-italic font-bold uppercase opacity-80">
+                        {isSwarming ? 'Attacking...' : 'Execute Txs'}
+                    </span>
+                </button>
+            </div>
 
         </div>
 
@@ -413,7 +545,7 @@ const App: React.FC = () => {
                 <div className="bg-white border-2 border-celo-black shadow-brutal p-4 flex flex-col justify-between h-32">
                     <span className="font-bold text-xs uppercase tracking-wider border-b-2 border-black pb-1 w-fit">Active Fleet</span>
                     <span className="text-5xl font-serif font-medium">
-                        {wallets.filter(w => w.status !== 'idle' && w.status !== 'done').length}
+                        {wallets.length > 0 ? wallets.filter(w => w.status !== 'idle' && w.status !== 'done').length : 0}
                         <span className="text-xl text-gray-400 font-sans ml-2">/ {wallets.length}</span>
                     </span>
                 </div>
@@ -435,17 +567,40 @@ const App: React.FC = () => {
             </div>
 
             {/* WALLET GRID */}
-            <div className="border-2 border-celo-black bg-celo-blue/20 p-6 shadow-brutal">
+            <div className="border-2 border-celo-black bg-celo-blue/20 p-6 shadow-brutal relative">
                 <div className="flex justify-between items-center mb-4">
-                    <h3 className="font-serif italic text-2xl">Wallet Fleet</h3>
-                    {wallets.length > 0 && (
-                        <button 
-                            onClick={handleDownloadWallets}
-                            className="bg-white border-2 border-celo-black px-3 py-1 text-xs font-bold hover:shadow-brutal-sm transition-all flex items-center gap-2"
-                        >
-                            <Download className="w-3 h-3" /> CSV
-                        </button>
-                    )}
+                    <div className="flex items-center gap-3">
+                        <h3 className="font-serif italic text-2xl">Wallet Fleet</h3>
+                        {wallets.length > 0 && (
+                            <button 
+                                onClick={resetFleet}
+                                className="bg-white/50 p-1 hover:bg-red-100 hover:text-red-500 rounded border border-transparent hover:border-red-500 transition-all"
+                                title="Reset Fleet"
+                                disabled={isBusy}
+                            >
+                                <Trash2 className="w-4 h-4" />
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-2">
+                        {wallets.length > 0 && (
+                            <button 
+                                onClick={() => updateFleetBalances(wallets)}
+                                className="bg-white border-2 border-celo-black px-3 py-1 text-xs font-bold hover:shadow-brutal-sm transition-all flex items-center gap-2"
+                                disabled={isBusy}
+                            >
+                                <RefreshCw className={`w-3 h-3 ${isBusy ? 'animate-spin' : ''}`} /> Refresh
+                            </button>
+                        )}
+                        {wallets.length > 0 && (
+                            <button 
+                                onClick={handleDownloadWallets}
+                                className="bg-white border-2 border-celo-black px-3 py-1 text-xs font-bold hover:shadow-brutal-sm transition-all flex items-center gap-2"
+                            >
+                                <Download className="w-3 h-3" /> CSV
+                            </button>
+                        )}
+                    </div>
                 </div>
                 
                 <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-6 gap-3 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
@@ -454,16 +609,21 @@ const App: React.FC = () => {
                             <div className={`absolute top-0 right-0 w-3 h-3 border-l-2 border-b-2 border-celo-black ${
                                 wallet.status === 'done' ? 'bg-celo-green' :
                                 wallet.status === 'error' ? 'bg-red-500' :
-                                wallet.status === 'sending' ? 'bg-celo-orange animate-pulse' : 'bg-gray-300'
+                                wallet.status === 'sending' ? 'bg-celo-orange animate-pulse' : 
+                                wallet.status === 'funding' ? 'bg-celo-purple animate-pulse' : 'bg-gray-300'
                             }`} />
                             <div className="font-bold text-xs mb-1">W{idx + 1}</div>
                             <div className="text-[10px] font-mono text-gray-500 truncate">{wallet.address}</div>
-                            <div className="mt-2 text-xs font-bold text-right">{wallet.txCount} tx</div>
+                             <div className="text-[10px] font-mono text-celo-black font-bold truncate mt-1">
+                                {wallet.balance ? parseFloat(wallet.balance).toFixed(3) : '0'} CELO
+                            </div>
+                            <div className="mt-1 text-[10px] font-bold text-right text-gray-400">{wallet.txCount} tx</div>
                         </div>
                     ))}
                     {wallets.length === 0 && (
-                        <div className="col-span-full py-12 text-center text-gray-500 font-mono text-sm border-2 border-dashed border-gray-400 bg-white/50">
-                            Fleet not initialized
+                        <div className="col-span-full py-12 text-center text-gray-500 font-mono text-sm border-2 border-dashed border-gray-400 bg-white/50 flex flex-col items-center justify-center gap-2">
+                            <span>Fleet not initialized</span>
+                            <span className="text-xs opacity-60">Click "Fund Fleet" to generate</span>
                         </div>
                     )}
                 </div>
